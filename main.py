@@ -1,26 +1,40 @@
-import os
+# Entry point: find every user in the MessageTable and send each their daily
+# summary, one by one.
 
-import anthropic
-from dotenv import load_dotenv
+import asyncio
 
-load_dotenv()
-
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-MODEL = "claude-opus-4-8"
+from message_api import TABLE, _get_client
+from summary import send_summary
 
 
-def generate_message(prompt: str) -> str:
-    """Ask Claude to generate a message and return the text."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
+async def get_all_phone_numbers() -> list[str]:
+    """Every distinct user phone number seen in the MessageTable, excluding the
+    "AGENT" sentinel. A number can appear as either the sender or the recipient."""
+    client = await _get_client()
+    response = await (
+        client.table(TABLE)
+        .select("from_phone_number, to_phone_number")
+        .execute()
     )
-    return "".join(block.text for block in response.content if block.type == "text")
+    numbers: set[str] = set()
+    for row in response.data:
+        numbers.add(row["from_phone_number"])
+        numbers.add(row["to_phone_number"])
+    numbers.discard("AGENT")
+    return sorted(numbers)
+
+
+async def main() -> None:
+    numbers = await get_all_phone_numbers()
+    print(f"Sending daily summaries to {len(numbers)} number(s).")
+    for number in numbers:
+        print(f"-> {number}")
+        try:
+            await send_summary(number)
+        except Exception as exc:
+            # Don't let one bad number stop summaries for everyone else.
+            print(f"   failed for {number}: {exc!r}")
 
 
 if __name__ == "__main__":
-    # TODO: wire up Supabase + Blooio to fetch recipients and send messages.
-    text = generate_message("Write a short, friendly check-in message.")
-    print(text)
+     asyncio.run(main())

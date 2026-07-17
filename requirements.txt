@@ -1,4 +1,4 @@
-anthropic
-python-dotenv
-supabase
-httpx
+anthropic==0.117.0
+python-dotenv==1.2.2
+supabase==2.31.0
+httpx==0.28.1
