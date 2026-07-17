@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init *)",
+      "Bash(git branch *)",
+      "Bash(python3 -m venv venv)",
+      "Bash(./venv/bin/python --version)",
+      "Bash(./venv/bin/python -m pip install --quiet --upgrade pip)",
+      "Bash(./venv/bin/pip install *)",
+      "Bash(./venv/bin/pip list *)",
+      "Bash(./venv/bin/python -c \"from main import app; print\\('app imports OK, routes:', [r.path for r in app.routes if hasattr\\(r,'path'\\)]\\)\")",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'Initial FastAPI project scaffold *)"
+    ]
+  }
+}
