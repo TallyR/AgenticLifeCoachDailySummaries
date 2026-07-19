@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import anthropic
 
 from message_api import TABLE, _get_client, send_message
-from sarah_summary_prompt import SARAH_DAILY_PING_PROMPT
+from faro_summary_prompt import FARO_DAILY_PING_PROMPT
 
 # Created once and reused (keeps its connection pool warm). Reads
 # ANTHROPIC_API_KEY from the environment (loaded from .env by message_api).
@@ -56,7 +56,7 @@ async def send_summary(phone_number: str) -> None:
     response = await _llm.beta.messages.create(
         model="claude-fable-5",
         max_tokens=4096,
-        system=SARAH_DAILY_PING_PROMPT,
+        system=FARO_DAILY_PING_PROMPT,
         messages=[{"role": "user", "content": context}],
         betas=["server-side-fallback-2026-06-01"],
         fallbacks=[{"model": "claude-opus-4-8"}],
