@@ -6,6 +6,12 @@ import asyncio
 from message_api import TABLE, _get_client
 from summary import send_summary
 
+# Numbers here are skipped entirely — no summary is generated or sent.
+# Use the same format they appear as in the DB, e.g. "+18323346991".
+BLOCKLIST: set[str] = {
+    "+17147590563"
+}
+
 
 async def get_all_phone_numbers() -> list[str]:
     """Every distinct user phone number seen in the MessageTable, excluding the
@@ -28,6 +34,9 @@ async def main() -> None:
     numbers = await get_all_phone_numbers()
     print(f"Sending daily summaries to {len(numbers)} number(s).")
     for number in numbers:
+        if number in BLOCKLIST:
+            print(f"-> {number} (blocked, skipping)")
+            continue
         print(f"-> {number}")
         try:
             await send_summary(number)
