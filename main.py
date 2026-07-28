@@ -9,8 +9,12 @@ from summary import send_summary
 # Numbers here are skipped entirely — no summary is generated or sent.
 # Use the same format they appear as in the DB, e.g. "+18323346991".
 BLOCKLIST: set[str] = {
-    "+17147590563"
+    "+17147590563",
+    "+16477214294"
 }
+
+# Seconds to wait between sends, so we don't spam the messaging API.
+DELAY_SECONDS = 15
 
 
 async def get_all_phone_numbers() -> list[str]:
@@ -37,6 +41,7 @@ async def main() -> None:
         if number in BLOCKLIST:
             print(f"-> {number} (blocked, skipping)")
             continue
+        await asyncio.sleep(DELAY_SECONDS)  # space out sends to avoid spamming
         print(f"-> {number}")
         try:
             await send_summary(number)
