@@ -2,6 +2,7 @@
 # summary, one by one.
 
 import asyncio
+import random
 
 from message_api import TABLE, _get_client
 from summary import send_summary
@@ -15,8 +16,10 @@ BLOCKLIST: set[str] = {
     "+14013692796"
 }
 
-# Seconds to wait between sends, so we don't spam the messaging API.
-DELAY_SECONDS = 15
+# Random wait between sends (seconds), so sends look less bot-like and avoid
+# spam-filter / rate-limit issues.
+MIN_DELAY_SECONDS = 50
+MAX_DELAY_SECONDS = 120
 
 
 async def get_all_phone_numbers() -> list[str]:
@@ -43,8 +46,9 @@ async def main() -> None:
         if number in BLOCKLIST:
             print(f"-> {number} (blocked, skipping)")
             continue
-        await asyncio.sleep(DELAY_SECONDS)  # space out sends to avoid spamming
-        print(f"-> {number}")
+        delay = random.randint(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+        print(f"-> {number} (after {delay}s)")
+        await asyncio.sleep(delay)
         try:
             await send_summary(number)
         except Exception as exc:

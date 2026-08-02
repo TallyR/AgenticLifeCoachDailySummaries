@@ -13,6 +13,10 @@ from faro_summary_prompt import FARO_DAILY_PING_PROMPT
 # ANTHROPIC_API_KEY from the environment (loaded from .env by message_api).
 _llm = anthropic.AsyncAnthropic()
 
+# On a failed send, wait this long and retry, up to this many times.
+RETRY_DELAY_SECONDS = 10
+MAX_RETRIES = 2
+
 
 async def get_conversation(phone_number: str) -> list[dict]:
     """Return every message to or from `phone_number`, oldest first (by sent_at)."""
@@ -70,7 +74,19 @@ async def send_summary(phone_number: str) -> None:
 
     # send_message posts to Blooio (raises on a non-2xx response), then saves
     # the row as from_phone_number="AGENT", to_phone_number=phone_number.
-    await send_message(phone_number, reply)
+    # Retry the send on failure; re-raise after MAX_RETRIES so the caller logs it.
+    for attempt in range(MAX_RETRIES + 1):  # 1 initial try + MAX_RETRIES retries
+        try:
+            await send_message(phone_number, reply)
+            return
+        except Exception as exc:
+            if attempt >= MAX_RETRIES:
+                raise
+            print(
+                f"retry {phone_number}: attempt {attempt + 1} failed ({exc!r}); "
+                f"retrying in {RETRY_DELAY_SECONDS}s"
+            )
+            await asyncio.sleep(RETRY_DELAY_SECONDS)
 
 
 if __name__ == "__main__":
