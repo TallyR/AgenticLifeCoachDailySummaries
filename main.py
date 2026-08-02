@@ -11,7 +11,8 @@ from summary import send_summary
 BLOCKLIST: set[str] = {
     "+17147590563",
     "+16477214294",
-    "+13134596070"
+    "+13134596070",
+    "+14013692796"
 }
 
 # Seconds to wait between sends, so we don't spam the messaging API.
