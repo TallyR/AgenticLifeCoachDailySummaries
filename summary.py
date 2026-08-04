@@ -2,12 +2,17 @@
 # history, then save + send it via Blooio.
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import anthropic
 
 from message_api import TABLE, _get_client, send_message
 from faro_summary_prompt import FARO_DAILY_PING_PROMPT
+from faro_time_api import (
+    get_current_date_and_time_from_timezone,
+    get_current_date_and_time_tool_definition,
+)
 
 # Created once and reused (keeps its connection pool warm). Reads
 # ANTHROPIC_API_KEY from the environment (loaded from .env by message_api).
@@ -16,6 +21,9 @@ _llm = anthropic.AsyncAnthropic()
 # On a failed send, wait this long and retry, up to this many times.
 RETRY_DELAY_SECONDS = 10
 MAX_RETRIES = 2
+
+# Max model turns in the agentic tool loop before giving up (safety cap).
+TURN_LIMIT = 10
 
 
 async def get_conversation(phone_number: str) -> list[dict]:
@@ -46,10 +54,41 @@ def _render_history(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def send_summary(phone_number: str) -> None:
+def _run_tool(block) -> dict:
+    """Execute a tool_use block from the model and return a tool_result block."""
+    print(f"tool call: {block.name}({block.input})")
+    try:
+        if block.name == "get_current_date_and_time_from_timezone":
+            result = get_current_date_and_time_from_timezone(**block.input)
+            print(f"tool result: {result}")
+            content = json.dumps(result)
+        else:
+            print(f"tool error: unknown tool {block.name}")
+            return {
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": f"Unknown tool: {block.name}",
+                "is_error": True,
+            }
+    except Exception as exc:
+        print(f"tool error: {exc!r}")
+        return {
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": f"Error: {exc!r}",
+            "is_error": True,
+        }
+    return {"type": "tool_result", "tool_use_id": block.id, "content": content}
+
+
+async def send_summary(phone_number: str, debug: bool = False) -> None:
     """Build context from this user's full conversation history, ask Sarah for a
     check-in message, then save it (from AGENT to the user) and send it via
-    Blooio. Raises if no message is generated or if the send/save fails."""
+    Blooio. Raises if no message is generated or if the send/save fails.
+
+    When debug is True, the message is generated and printed but NOT sent or
+    saved: no Blooio call and no DB write, so the system's outer state is left
+    untouched (for a test harness)."""
     history = await get_conversation(phone_number)
 
     context = (
@@ -57,20 +96,52 @@ async def send_summary(phone_number: str) -> None:
         "Write today's check-in message to send to this user."
     )
 
-    response = await _llm.beta.messages.create(
-        model="claude-fable-5",
-        max_tokens=4096,
-        system=FARO_DAILY_PING_PROMPT,
-        messages=[{"role": "user", "content": context}],
-        betas=["server-side-fallback-2026-06-01"],
-        fallbacks=[{"model": "claude-opus-4-8"}],
-    )
+    messages = [{"role": "user", "content": context}]
+    tools = [get_current_date_and_time_tool_definition()]
+
+    # Agentic loop: let the model call the time tool (to resolve relative dates)
+    # before it writes the ping. TURN_LIMIT caps the number of tool turns.
+    for _ in range(TURN_LIMIT):
+        response = await _llm.beta.messages.create(
+            model="claude-fable-5",
+            max_tokens=8192,
+            system=FARO_DAILY_PING_PROMPT,
+            messages=messages,
+            tools=tools,
+            betas=["server-side-fallback-2026-06-01"],
+            fallbacks=[{"model": "claude-opus-4-8"}],
+        )
+        if response.stop_reason != "tool_use":
+            break
+        # Echo the assistant turn back verbatim (preserves thinking + tool_use
+        # blocks, required when continuing on the same model) and answer every
+        # tool call in a single user message.
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    _run_tool(b) for b in response.content if b.type == "tool_use"
+                ],
+            }
+        )
+    else:
+        raise RuntimeError(
+            f"send_summary hit TURN_LIMIT ({TURN_LIMIT}) without a final message"
+        )
 
     reply = "".join(b.text for b in response.content if b.type == "text")
-    if response.stop_reason == "refusal" or not reply.strip():
+    # Only a clean finish is safe to send. end_turn is the sole success state
+    # here; refusal or max_tokens (a truncated mid-message reply) must not go out.
+    if response.stop_reason != "end_turn" or not reply.strip():
         raise RuntimeError(
-            f"No summary generated (stop_reason={response.stop_reason})"
+            f"No usable summary (stop_reason={response.stop_reason})"
         )
+
+    if debug:
+        # Debug: don't touch outer state — no Blooio send, no DB save. Just show it.
+        print(f"[DEBUG] would send to {phone_number}:\n{reply}")
+        return
 
     # send_message posts to Blooio (raises on a non-2xx response), then saves
     # the row as from_phone_number="AGENT", to_phone_number=phone_number.
