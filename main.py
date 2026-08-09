@@ -22,7 +22,6 @@ BLOCKLIST: set[str] = {
     "+16318270092",
     "+14704762943",
     "+12102627193",
-    "+14044317389"
 }
 
 # Random wait between sends (seconds), so sends look less bot-like and avoid
@@ -32,18 +31,28 @@ MAX_DELAY_SECONDS = 120
 
 
 async def get_all_phone_numbers() -> list[str]:
-    """Every distinct user phone number seen in the MessageTable, excluding the
-    "AGENT" sentinel. A number can appear as either the sender or the recipient."""
+    """Every distinct user phone number in the MessageTable, excluding the
+    "AGENT" sentinel. A number can appear as either the sender or the recipient.
+    Pages through the table in 1000-row chunks so the default row cap on a plain
+    select doesn't silently drop users."""
     client = await _get_client()
-    response = await (
-        client.table(TABLE)
-        .select("from_phone_number, to_phone_number")
-        .execute()
-    )
     numbers: set[str] = set()
-    for row in response.data:
-        numbers.add(row["from_phone_number"])
-        numbers.add(row["to_phone_number"])
+    page_size = 1000
+    start = 0
+    while True:
+        response = await (
+            client.table(TABLE)
+            .select("from_phone_number, to_phone_number")
+            .range(start, start + page_size - 1)
+            .execute()
+        )
+        rows = response.data
+        for row in rows:
+            numbers.add(row["from_phone_number"])
+            numbers.add(row["to_phone_number"])
+        if len(rows) < page_size:
+            break
+        start += page_size
     numbers.discard("AGENT")
     return sorted(numbers)
 
