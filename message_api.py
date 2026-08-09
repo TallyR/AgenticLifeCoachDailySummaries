@@ -2,6 +2,7 @@
 # { phoneNumber: 999-999-9999 | AGENT, text: "Test" }
 
 import os
+import uuid
 from urllib.parse import quote
 
 import httpx
@@ -46,14 +47,27 @@ async def save_message(
     return response.data[0]
 
 
-async def send_message(phone_number: str, message: str) -> dict:
-    """Send an outbound message via Blooio, then save it."""
+async def send_message(
+    phone_number: str, message: str, idempotency_key: str | None = None
+) -> dict:
+    """Send an outbound message via Blooio, then save it.
+
+    Pass a stable idempotency_key so a retry of the same message doesn't
+    double-send: Blooio returns the original result for a repeated key (and 409s
+    if the same key is reused with a different body). A fresh key is generated
+    when none is given."""
+    if idempotency_key is None:
+        idempotency_key = str(uuid.uuid4())
     chat_id = quote(phone_number, safe="")
-    auth = {"Authorization": f"Bearer {os.environ['BLOOIO_API_KEY']}"}
-    async with httpx.AsyncClient() as client:
+    headers = {
+        "Authorization": f"Bearer {os.environ['BLOOIO_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
             f"https://api.blooio.com/v2/api/chats/{chat_id}/messages",
-            headers={**auth, "Content-Type": "application/json"},
+            headers=headers,
             json={"text": message},
         )
     res.raise_for_status()

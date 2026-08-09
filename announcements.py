@@ -5,6 +5,7 @@
 
 import asyncio
 import random
+import uuid
 
 from main import BLOCKLIST
 from message_api import TABLE, _get_client, send_message
@@ -47,11 +48,13 @@ async def get_all_phone_numbers() -> list[str]:
 
 async def send_announcement(number: str, message: str) -> bool:
     """Send one announcement to `number` via send_message. On failure, waits
-    RETRY_DELAY_SECONDS and retries up to MAX_RETRIES times. Prints and returns
-    whether it ultimately succeeded; never raises, so a blast can continue."""
+    RETRY_DELAY_SECONDS and retries up to MAX_RETRIES times, reusing one
+    idempotency key so a timed-out but delivered send isn't duplicated. Prints
+    and returns whether it ultimately succeeded; never raises."""
+    idempotency_key = str(uuid.uuid4())
     for attempt in range(MAX_RETRIES + 1):  # 1 initial try + MAX_RETRIES retries
         try:
-            await send_message(number, message)
+            await send_message(number, message, idempotency_key=idempotency_key)
         except Exception as exc:
             if attempt < MAX_RETRIES:
                 print(

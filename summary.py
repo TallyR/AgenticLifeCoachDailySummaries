@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timezone
 
 import anthropic
@@ -145,10 +146,12 @@ async def send_summary(phone_number: str, debug: bool = False) -> None:
 
     # send_message posts to Blooio (raises on a non-2xx response), then saves
     # the row as from_phone_number="AGENT", to_phone_number=phone_number.
-    # Retry the send on failure; re-raise after MAX_RETRIES so the caller logs it.
+    # Retry the send on failure, reusing one idempotency key so a timed-out but
+    # delivered send isn't duplicated; re-raise after MAX_RETRIES so main logs it.
+    idempotency_key = str(uuid.uuid4())
     for attempt in range(MAX_RETRIES + 1):  # 1 initial try + MAX_RETRIES retries
         try:
-            await send_message(phone_number, reply)
+            await send_message(phone_number, reply, idempotency_key=idempotency_key)
             return
         except Exception as exc:
             if attempt >= MAX_RETRIES:
