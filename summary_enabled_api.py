@@ -7,7 +7,7 @@ ENABLED_TABLE = "EnabledDailySummaries"
 
 # How many of the most recent messages to look at when deciding if the
 # conversation has gone one-sided (all AGENT, no user replies).
-LAST_N_MESSAGES = 7
+LAST_N_MESSAGES = 8
 
 
 async def is_summary_enabled(phone_number: str) -> bool:
