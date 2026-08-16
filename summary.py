@@ -10,10 +10,12 @@ import anthropic
 
 from message_api import TABLE, _get_client, send_message
 from faro_summary_prompt import FARO_DAILY_PING_PROMPT
+from faro_pause_prompt import FARO_PAUSE_PROMPT
 from faro_time_api import (
     get_current_date_and_time_from_timezone,
     get_current_date_and_time_tool_definition,
 )
+from summary_enabled_api import LAST_N_MESSAGES, disable_summaries
 
 # Created once and reused (keeps its connection pool warm). Reads
 # ANTHROPIC_API_KEY from the environment (loaded from .env by message_api).
@@ -161,6 +163,64 @@ async def send_summary(phone_number: str, debug: bool = False) -> None:
                 f"retrying in {RETRY_DELAY_SECONDS}s"
             )
             await asyncio.sleep(RETRY_DELAY_SECONDS)
+
+
+async def send_pause_notice(phone_number: str, debug: bool = False) -> None:
+    """This user hasn't replied in LAST_N_MESSAGES messages. Generate a warm,
+    personable note from their history telling them daily summaries are pausing
+    until they text back (reminders keep running), send it, then permanently
+    disable summaries via disable_summaries.
+
+    When debug is True, the note is generated and printed but NOT sent, and
+    summaries are NOT disabled — the system's outer state is left untouched."""
+    history = await get_conversation(phone_number)
+
+    context = (
+        f"<message_history>\n{_render_history(history)}\n</message_history>\n\n"
+        f"You have sent {LAST_N_MESSAGES} messages in a row with no reply from "
+        "this user. Write them the pause message per your instructions."
+    )
+
+    response = await _llm.beta.messages.create(
+        model="claude-fable-5",
+        max_tokens=8192,
+        system=FARO_PAUSE_PROMPT,
+        messages=[{"role": "user", "content": context}],
+        betas=["server-side-fallback-2026-06-01"],
+        fallbacks=[{"model": "claude-opus-4-8"}],
+    )
+
+    reply = "".join(b.text for b in response.content if b.type == "text")
+    if response.stop_reason != "end_turn" or not reply.strip():
+        raise RuntimeError(
+            f"No pause notice generated (stop_reason={response.stop_reason})"
+        )
+
+    if debug:
+        print(
+            f"[DEBUG] would send pause notice to {phone_number} and disable "
+            f"summaries:\n{reply}"
+        )
+        return
+
+    # Send first (retry with one stable idempotency key), and only disable
+    # summaries once the notice actually went out — so a failed send retries next
+    # run instead of silently pausing someone who never got told.
+    idempotency_key = str(uuid.uuid4())
+    for attempt in range(MAX_RETRIES + 1):  # 1 initial try + MAX_RETRIES retries
+        try:
+            await send_message(phone_number, reply, idempotency_key=idempotency_key)
+            break
+        except Exception as exc:
+            if attempt >= MAX_RETRIES:
+                raise
+            print(
+                f"retry {phone_number}: attempt {attempt + 1} failed ({exc!r}); "
+                f"retrying in {RETRY_DELAY_SECONDS}s"
+            )
+            await asyncio.sleep(RETRY_DELAY_SECONDS)
+
+    await disable_summaries(phone_number)
 
 
 if __name__ == "__main__":
