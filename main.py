@@ -30,7 +30,8 @@ BLOCKLIST: set[str] = {
     "+18324340684",
     "+16316365484",
     "+15732050683",
-    "+16508621055"
+    "+16508621055",
+    "+14082424771" #user doesnt like early morning nags
 }
 
 # Random wait between sends (seconds), so sends look less bot-like and avoid
