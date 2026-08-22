@@ -25,6 +25,11 @@ _llm = anthropic.AsyncAnthropic()
 RETRY_DELAY_SECONDS = 10
 MAX_RETRIES = 2
 
+# Commitment tables, shared with the prompt service (AgenticLifeCoachPromptService).
+REMINDER_TABLE = "ReminderToolTable"
+EVENT_TABLE = "EventToolTable"
+NAG_TABLE = "DailyNagTable"
+
 # Max model turns in the agentic tool loop before giving up (safety cap).
 TURN_LIMIT = 10
 
@@ -43,6 +48,52 @@ async def get_conversation(phone_number: str) -> list[dict]:
         .execute()
     )
     return response.data
+
+
+async def get_active_commitments(phone_number: str) -> str:
+    """All reminders, events, and standing nags for this number, formatted for
+    the prompt. Mirrors get_active_commitments in the prompt service so both
+    surfaces describe the same board the same way. Returns "NONE" when empty."""
+    client = await _get_client()
+    reminders, events, nags = await asyncio.gather(
+        client.table(REMINDER_TABLE)
+        .select("*")
+        .eq("user_number", phone_number)
+        .execute(),
+        client.table(EVENT_TABLE)
+        .select("*")
+        .eq("user_number", phone_number)
+        .execute(),
+        # NB: this table's column is user_phone_number, not user_number.
+        client.table(NAG_TABLE)
+        .select("*")
+        .eq("user_phone_number", phone_number)
+        .execute(),
+    )
+
+    lines = []
+    for r in reminders.data:
+        occurrences = (
+            "repeats forever"
+            if r["number_of_occurrences"] == -1
+            else f"{r['number_of_occurrences']} occurrences left"
+        )
+        lines.append(
+            f"REMINDER id={r['id']}: every {', '.join(r['days_of_week'])} at "
+            f"{r['hour_to_be_triggered']}:{r['minute_to_be_triggered']:02d}:"
+            f"{r['second_to_be_triggered']:02d} {r['am_or_pm']} "
+            f"({r['timezone']}), {occurrences} — \"{r['note']}\""
+        )
+    for e in events.data:
+        lines.append(
+            f"EVENT id={e['id']}: {e['year']}-{e['month']:02d}-{e['day']:02d} "
+            f"at {e['hour']}:{e['minute']:02d}:{e['second']:02d} "
+            f"{e['am_or_pm']} ({e['timezone']}) — \"{e['note']}\""
+        )
+    for n in nags.data:
+        lines.append(f"NAG id={n['id']}: \"{n['nag_note']}\"")
+
+    return "\n".join(lines) if lines else "NONE"
 
 
 def _render_history(rows: list[dict]) -> str:
@@ -92,10 +143,14 @@ async def send_summary(phone_number: str, debug: bool = False) -> None:
     When debug is True, the message is generated and printed but NOT sent or
     saved: no Blooio call and no DB write, so the system's outer state is left
     untouched (for a test harness)."""
-    history = await get_conversation(phone_number)
+    history, active_items = await asyncio.gather(
+        get_conversation(phone_number),
+        get_active_commitments(phone_number),
+    )
 
     context = (
         f"<message_history>\n{_render_history(history)}\n</message_history>\n\n"
+        f"<active_commitments>\n{active_items}\n</active_commitments>\n\n"
         "Write today's check-in message to send to this user."
     )
 
